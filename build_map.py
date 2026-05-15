@@ -101,6 +101,26 @@ def build_html(rows):
     text-transform:uppercase; color:var(--accent); margin-bottom:2px; }}
   #sidebar-header p {{ font-size:11px; color:var(--muted); line-height:1.4; }}
   #sidebar-header .meta {{ font-size:10px; color:var(--muted); margin-top:5px; }}
+  #search-wrap {{ padding:10px 16px; border-bottom:1px solid var(--border); flex-shrink:0; position:relative; }}
+  #search-input {{ width:100%; padding:7px 30px 7px 10px; border-radius:6px;
+    border:1px solid var(--border); background:var(--bg); color:var(--text);
+    font-size:12px; font-family:'DM Sans',sans-serif; outline:none; transition:border .15s; }}
+  #search-input:focus {{ border-color:var(--accent); }}
+  #search-input::placeholder {{ color:var(--muted); }}
+  #search-clear {{ position:absolute; right:24px; top:50%; transform:translateY(-50%);
+    background:none; border:none; cursor:pointer; color:var(--muted);
+    font-size:14px; line-height:1; display:none; padding:2px; }}
+  #search-clear:hover {{ color:var(--text); }}
+  #search-results {{ position:absolute; left:16px; right:16px; top:100%;
+    background:var(--panel); border:1px solid var(--border); border-top:none;
+    border-radius:0 0 6px 6px; z-index:2000; max-height:200px; overflow-y:auto;
+    box-shadow:0 4px 12px rgba(0,0,0,.1); display:none; }}
+  .search-result {{ padding:8px 12px; font-size:12px; cursor:pointer;
+    border-bottom:1px solid var(--border); transition:background .1s; }}
+  .search-result:last-child {{ border-bottom:none; }}
+  .search-result:hover {{ background:var(--bg); }}
+  .search-result strong {{ color:var(--accent); font-weight:600; }}
+  .search-result .sr-sub {{ font-size:10px; color:var(--muted); margin-top:1px; }}
   #count-bar {{ padding:8px 20px; background:var(--accent); color:#fff;
     font-size:12px; font-weight:500; display:flex; align-items:center; gap:6px; flex-shrink:0; }}
   #count-bar span {{ font-weight:700; font-size:15px; }}
@@ -176,6 +196,11 @@ def build_html(rows):
       <p>Australia-wide map of schools and early childhood centres operating integrated community service models.</p>
       <p class="meta">Dataset: {total} sites &nbsp;·&nbsp; Updated {built}</p>
     </div>
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="Search by school name…" autocomplete="off" spellcheck="false">
+      <button id="search-clear" title="Clear">✕</button>
+      <div id="search-results"></div>
+    </div>
     <div id="count-bar">Showing <span id="vis-count">{total}</span> of {total} sites</div>
     <div id="filters">
       <div class="filter-section">
@@ -216,7 +241,7 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}
   subdomains:'abcd', maxZoom:19
 }}).addTo(map);
 
-let activeStates=new Set(), activePTypes=new Set(), activeTAs=new Set(), activePL=null;
+let activeStates=new Set(), activePTypes=new Set(), activeTAs=new Set(), activePL=null, activeSearch=null;
 const plCounts={{}};
 DATA.forEach(d=>plCounts[d.pl]=(plCounts[d.pl]||0)+1);
 
@@ -292,7 +317,8 @@ function applyFilters(){{
       (activeStates.size===0||activeStates.has(d.st))&&
       (activePTypes.size===0||activePTypes.has(d.pt))&&
       (activeTAs.size===0||activeTAs.has(d.ta))&&
-      (!activePL||activePL===d.pl);
+      (!activePL||activePL===d.pl)&&
+      (!activeSearch||d.n===activeSearch);
     if(ok){{ cluster.addLayer(m); visible++; }}
   }});
   document.getElementById('vis-count').textContent=visible;
@@ -353,8 +379,82 @@ Object.keys(COLORS).sort().forEach(pl=>{{
 
 document.getElementById('reset-btn').addEventListener('click',()=>{{
   activeStates.clear(); activePTypes.clear(); activeTAs.clear(); activePL=null;
+  activeSearch = null;
   document.querySelectorAll('.pill.active,.pt-pill.active').forEach(b=>b.classList.remove('active'));
+  const si = document.getElementById('search-input');
+  si.value = '';
+  document.getElementById('search-clear').style.display = 'none';
+  document.getElementById('search-results').style.display = 'none';
   applyFilters();
+}});
+
+// ── Search ────────────────────────────────────────────────────────────────
+const searchInput   = document.getElementById('search-input');
+const searchClear   = document.getElementById('search-clear');
+const searchResults = document.getElementById('search-results');
+
+function highlight(text, query) {{
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  return text.slice(0,idx) + '<strong>' + text.slice(idx, idx+query.length) + '</strong>' + text.slice(idx+query.length);
+}}
+
+searchInput.addEventListener('input', () => {{
+  const q = searchInput.value.trim();
+  searchClear.style.display = q ? 'block' : 'none';
+  activeSearch = null;
+
+  if (q.length < 2) {{
+    searchResults.style.display = 'none';
+    applyFilters();
+    return;
+  }}
+
+  const ql = q.toLowerCase();
+  const matches = DATA.filter(d => d.n.toLowerCase().includes(ql)).slice(0, 12);
+
+  if (!matches.length) {{
+    searchResults.innerHTML = '<div class="search-result" style="color:var(--muted);cursor:default">No results</div>';
+    searchResults.style.display = 'block';
+    return;
+  }}
+
+  searchResults.innerHTML = matches.map(d => `
+    <div class="search-result" data-name="${{d.n.replace(/"/g,'&quot;')}}">
+      <div>${{highlight(d.n, q)}}</div>
+      <div class="sr-sub">${{d.pl}} &nbsp;·&nbsp; ${{d.su}}, ${{d.st}}</div>
+    </div>`).join('');
+  searchResults.style.display = 'block';
+
+  searchResults.querySelectorAll('.search-result[data-name]').forEach(el => {{
+    el.addEventListener('click', () => {{
+      const name = el.dataset.name;
+      activeSearch = name;
+      searchInput.value = name;
+      searchResults.style.display = 'none';
+      applyFilters();
+
+      // Fly to the marker and open its popup
+      const marker = allMarkers.find(m => m._data.n === name);
+      if (marker) {{
+        map.setView([marker._data.lat, marker._data.lon], 14, {{animate:true}});
+        setTimeout(() => marker.openPopup(), 400);
+      }}
+    }});
+  }});
+}});
+
+searchClear.addEventListener('click', () => {{
+  searchInput.value = '';
+  searchClear.style.display = 'none';
+  searchResults.style.display = 'none';
+  activeSearch = null;
+  applyFilters();
+}});
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {{
+  if (!e.target.closest('#search-wrap')) searchResults.style.display = 'none';
 }});
 
 applyFilters();
